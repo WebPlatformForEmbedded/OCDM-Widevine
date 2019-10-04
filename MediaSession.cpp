@@ -297,6 +297,10 @@ CDMi_RESULT MediaKeySession::Decrypt(
   CDMi_RESULT status = CDMi_S_FALSE;
   *f_pcbOpaqueClearContent = 0;
 
+  uint8_t blockOffset = 0;
+  if (f_cbIV > 16)
+    blockOffset = *((uint8_t *)f_pbIV + 16);
+  
   memcpy(m_IV, f_pbIV, (f_cbIV > 16 ? 16 : f_cbIV));
   if (f_cbIV < 16) {
     memset(&(m_IV[f_cbIV]), 0, 16 - f_cbIV);
@@ -326,6 +330,7 @@ CDMi_RESULT MediaKeySession::Decrypt(
       input.key_id_length = (it->first).size();
       input.iv = m_IV;
       input.iv_length = sizeof(m_IV);
+      input.block_offset = blockOffset;
 
       if (widevine::Cdm::kSuccess == m_cdm->decrypt(input, output)) {
         /* Return clear content */
