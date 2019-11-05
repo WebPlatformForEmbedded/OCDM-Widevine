@@ -25,6 +25,8 @@
 
 namespace CDMi {
 
+using std::placeholders::_1;
+
 class WideVine : public IMediaKeys, public widevine::Cdm::IEventListener
 {
 private:
@@ -36,9 +38,12 @@ private:
 public:
     WideVine()
         : _adminLock()
+        , _pendingLock()
         , _cdm(nullptr)
         , _host()
-        , _sessions() {
+        , _sessions()
+        , _isServerCertificateSet(false)
+        , _pendingSessions() {
 
         widevine::Cdm::ClientInfo client_info;
 
@@ -60,13 +65,14 @@ public:
 #endif
         client_info.build_info = __DATE__;
 
-        // widevine::Cdm::DeviceCertificateRequest cert_request;
-
         if (widevine::Cdm::kSuccess == widevine::Cdm::initialize(
                 widevine::Cdm::kNoSecureOutput, client_info, &_host, &_host, &_host, static_cast<widevine::Cdm::LogLevel>(0))) {
-	    // Setting the last parameter to true, requres serviceCertificates so the requests can be encrypted. Currently badly supported
-            // in the EME tests, so turn of for now :-)
+#ifdef ENABLE_SERVICE_CERTIFICATE
+            _cdm = widevine::Cdm::create(this, &_host, true);
+#else
             _cdm = widevine::Cdm::create(this, &_host, false);
+            _isServerCertificateSet = true;
+#endif
         }
     }
     virtual ~WideVine() {
@@ -101,7 +107,9 @@ public:
         CDMi_RESULT dr = CDMi_S_FALSE;
         *f_ppiMediaKeySession = nullptr;
 
-        MediaKeySession* mediaKeySession = new MediaKeySession(_cdm, licenseType);
+        MediaKeySession* mediaKeySession = new MediaKeySession(_cdm,
+                licenseType,
+                std::bind(&SessionCallback, reinterpret_cast<void*>(this), _1));
 
         dr = mediaKeySession->Init(licenseType,
             f_pwszInitDataType,
@@ -115,12 +123,76 @@ public:
             delete mediaKeySession;
         }
         else {
-            std::string sessionId (mediaKeySession->GetSessionId());
-            _sessions.insert(std::pair<std::string, MediaKeySession*>(sessionId, mediaKeySession));
             *f_ppiMediaKeySession = mediaKeySession;
         }
 
         return dr;
+    }
+
+    static void SessionCallback(void* mediaKeysArg, void* mediaKeySessionArg)
+    {
+        WideVine* mediaKeys = reinterpret_cast<WideVine*>(mediaKeysArg);
+        MediaKeySession* mediaKeySession =
+                reinterpret_cast<MediaKeySession*>(mediaKeySessionArg);
+        mediaKeys->SessionCallbacki(mediaKeySession);
+    }
+
+    void SessionCallbacki(MediaKeySession* mediaKeySession)
+    {
+        if (mediaKeySession == nullptr) {
+            _pendingLock.Lock();
+            _isServerCertificateSet = true;
+            _pendingLock.Unlock();
+
+            for (auto iter = _pendingSessions.begin();
+                    iter != _pendingSessions.end(); ++iter) {
+                mediaKeySession = *iter;
+                createSession(mediaKeySession);
+            }
+            _pendingSessions.clear();
+
+        } else {
+            bool isFirstRequest = false;
+            bool isPendingSession = false;
+
+            _pendingLock.Lock();
+            if (_isServerCertificateSet == false) {
+                isPendingSession = true;
+                isFirstRequest = _pendingSessions.empty();
+                _pendingSessions.push_back(mediaKeySession);
+            }
+            _pendingLock.Unlock();
+
+            if (isPendingSession == true) {
+                if (isFirstRequest == true) {
+                    CDMi_RESULT ret =
+                            mediaKeySession->sendServerCertificateRequest();
+                    ASSERT(ret == CDMi_SUCCESS);
+                    (void)ret; // To supress warning
+                }
+            } else {
+                createSession(mediaKeySession);
+            }
+        }
+    }
+
+    void createSession(MediaKeySession* mediaKeySession)
+    {
+        CDMi_RESULT ret = mediaKeySession->createSession();
+        ASSERT(ret == CDMi_SUCCESS);
+
+        if (ret == CDMi_SUCCESS) {
+
+            _adminLock.Lock();
+            std::string sessionId(mediaKeySession->GetSessionIdInternal());
+            _sessions.insert(
+                    std::pair<std::string, MediaKeySession*>(sessionId,
+                            mediaKeySession));
+            _adminLock.Unlock();
+
+            ret = mediaKeySession->generateRequest();
+            ASSERT(ret == CDMi_SUCCESS);
+        }
     }
 
     virtual CDMi_RESULT SetServerCertificate(
@@ -217,9 +289,12 @@ public:
 
 private:
     WPEFramework::Core::CriticalSection _adminLock;
+    WPEFramework::Core::CriticalSection _pendingLock;
     widevine::Cdm* _cdm;
     HostImplementation _host;
     SessionMap _sessions;
+    bool _isServerCertificateSet;
+    std::vector<MediaKeySession*> _pendingSessions;
 };
 
 static SystemFactoryType<WideVine> g_instance({"video/webm", "video/mp4", "audio/webm", "audio/mp4"});

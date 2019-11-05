@@ -25,7 +25,9 @@ void HostImplementation::Reset() {
   _saveDeviceCert = false;
 
   _files.clear();
+#ifndef ENABLE_DEVICE_PROVISIONING
   _files[kCertificateFilename.c_str()] = std::string(reinterpret_cast<const char*>(kDeviceCert), kDeviceCertSize);
+#endif
 }
 
 int HostImplementation::NumTimers() const { 

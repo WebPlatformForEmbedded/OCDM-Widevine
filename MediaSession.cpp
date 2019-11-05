@@ -37,16 +37,21 @@ namespace CDMi {
 
 WPEFramework::Core::CriticalSection g_lock;
 
-MediaKeySession::MediaKeySession(widevine::Cdm *cdm, int32_t licenseType)
+MediaKeySession::MediaKeySession(
+        widevine::Cdm *cdm, int32_t licenseType,
+        std::function<void(void*)> cb)
     : m_cdm(cdm)
     , m_CDMData("")
     , m_initData("")
     , m_initDataType(widevine::Cdm::kCenc)
     , m_licenseType((widevine::Cdm::SessionType)licenseType)
-    , m_sessionId("") {
-  m_cdm->createSession(m_licenseType, &m_sessionId);
+    , m_sessionId("")
+    , m_isServerCertReqSent(false) {
 
   ::memset(m_IV, 0 , sizeof(m_IV));;
+  m_piSessionCallback = cb;
+  m_sessionIdExternal.assign(
+          std::to_string(reinterpret_cast<unsigned long>(this)));
 }
 
 MediaKeySession::~MediaKeySession(void) {
@@ -57,16 +62,60 @@ void MediaKeySession::Run(const IMediaKeySessionCallback *f_piMediaKeySessionCal
 
   if (f_piMediaKeySessionCallback) {
     m_piCallback = const_cast<IMediaKeySessionCallback*>(f_piMediaKeySessionCallback);
-
-    widevine::Cdm::Status status = m_cdm->generateRequest(m_sessionId, m_initDataType, m_initData);
-    if (widevine::Cdm::kSuccess != status) {
-       printf("generateRequest failed\n");
-       m_piCallback->OnKeyMessage((const uint8_t *) "", 0, "");
-    }
+    m_piSessionCallback(this);
   }
   else {
       m_piCallback = nullptr;
   }
+}
+
+CDMi_RESULT MediaKeySession::createSession()
+{
+  CDMi_RESULT ret = CDMi_S_FALSE;
+  g_lock.Lock();
+  widevine::Cdm::Status status = m_cdm->createSession(m_licenseType,
+      &m_sessionId);
+  ASSERT(widevine::Cdm::kSuccess == status);
+  if (widevine::Cdm::kSuccess == status) {
+    ret = CDMi_SUCCESS;
+  }
+  g_lock.Unlock();
+  return ret;
+}
+
+CDMi_RESULT MediaKeySession::generateRequest()
+{
+  CDMi_RESULT ret = CDMi_S_FALSE;
+  g_lock.Lock();
+  widevine::Cdm::Status status = m_cdm->generateRequest(m_sessionId,
+      m_initDataType, m_initData);
+  ASSERT(widevine::Cdm::kSuccess == status);
+  if (widevine::Cdm::kSuccess == status) {
+    ret = CDMi_SUCCESS;
+  }
+  g_lock.Unlock();
+  return ret;
+}
+
+CDMi_RESULT MediaKeySession::sendServerCertificateRequest()
+{
+  CDMi_RESULT ret = CDMi_S_FALSE;
+  g_lock.Lock();
+  std::string request;
+  widevine::Cdm::Status status = m_cdm->getServiceCertificateRequest(&request);
+  ASSERT(widevine::Cdm::kSuccess == status);
+  if (widevine::Cdm::kSuccess == status) {
+    std::string destUrl, message;
+    destUrl.assign(kLicenseServer);
+    message = std::to_string(widevine::Cdm::kLicenseRequest) + ":Type:";
+    message.append(request.c_str(), request.size());
+    m_piCallback->OnKeyMessage((const uint8_t*) message.c_str(), message.size(),
+        (char*) destUrl.c_str());
+    m_isServerCertReqSent = true;
+    ret = CDMi_SUCCESS;
+  }
+  g_lock.Unlock();
+  return ret;
 }
 
 void MediaKeySession::onMessage(widevine::Cdm::MessageType f_messageType, const std::string& f_message) {
@@ -186,7 +235,14 @@ void MediaKeySession::onRemoveComplete() {
 void MediaKeySession::onDeferredComplete(widevine::Cdm::Status) {
 }
 
-void MediaKeySession::onDirectIndividualizationRequest(const string&) {
+void MediaKeySession::onDirectIndividualizationRequest(const string& request) {
+
+  std::string destUrl, message;
+  destUrl.assign(kLicenseServer);
+  message = std::to_string(widevine::Cdm::kIndividualizationRequest) + ":Type:";
+  message.append(request.c_str(), request.size());
+  m_piCallback->OnKeyMessage((const uint8_t*) message.c_str(), message.size(),
+      (char*) destUrl.c_str());
 }
 
 CDMi_RESULT MediaKeySession::Load(void) {
@@ -206,10 +262,28 @@ void MediaKeySession::Update(
     uint32_t f_cbKeyMessageResponse) {
   std::string keyResponse(reinterpret_cast<const char*>(f_pbKeyMessageResponse),
       f_cbKeyMessageResponse);
-  g_lock.Lock();
-  if (widevine::Cdm::kSuccess != m_cdm->update(m_sessionId, keyResponse))
-     onKeyStatusChange();
-  g_lock.Unlock();
+  if (m_isServerCertReqSent == true) {
+    g_lock.Lock();
+    std::string certificate;
+    widevine::Cdm::Status status = m_cdm->parseServiceCertificateResponse(
+        keyResponse, &certificate);
+    ASSERT(widevine::Cdm::kSuccess == status);
+    if (widevine::Cdm::kSuccess == status) {
+      status = m_cdm->setServiceCertificate(certificate);
+      ASSERT(widevine::Cdm::kSuccess == status);
+      if (widevine::Cdm::kSuccess == status) {
+        m_piCallback->OnKeyStatusesUpdated();
+        m_isServerCertReqSent = false;
+      }
+    }
+    g_lock.Unlock();
+    m_piSessionCallback(nullptr);
+  } else {
+    g_lock.Lock();
+    if (widevine::Cdm::kSuccess != m_cdm->update(m_sessionId, keyResponse))
+      onKeyStatusChange();
+    g_lock.Unlock();
+  }
 }
 
 CDMi_RESULT MediaKeySession::Remove(void) {
@@ -234,6 +308,10 @@ CDMi_RESULT MediaKeySession::Close(void) {
 }
 
 const char* MediaKeySession::GetSessionId(void) const {
+  return m_sessionIdExternal.c_str();
+}
+
+const char* MediaKeySession::GetSessionIdInternal(void) const {
   return m_sessionId.c_str();
 }
 
@@ -297,6 +375,10 @@ CDMi_RESULT MediaKeySession::Decrypt(
   CDMi_RESULT status = CDMi_S_FALSE;
   *f_pcbOpaqueClearContent = 0;
 
+  uint8_t blockOffset = 0;
+  if (f_cbIV > 16)
+    blockOffset = *((uint8_t *)f_pbIV + 16);
+
   memcpy(m_IV, f_pbIV, (f_cbIV > 16 ? 16 : f_cbIV));
   if (f_cbIV < 16) {
     memset(&(m_IV[f_cbIV]), 0, 16 - f_cbIV);
@@ -327,6 +409,7 @@ CDMi_RESULT MediaKeySession::Decrypt(
       input.key_id_length = (it->first).size();
       input.iv = m_IV;
       input.iv_length = sizeof(m_IV);
+      input.block_offset = blockOffset;
 
       if (widevine::Cdm::kSuccess == m_cdm->decrypt(input, output)) {
         // Return decrypted content in place of the input buffer.

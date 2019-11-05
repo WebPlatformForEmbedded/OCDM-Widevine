@@ -20,6 +20,8 @@ set(PLUGIN_SOURCES
     MediaSession.cpp
     MediaSystem.cpp)
 
+add_definitions(-DENABLE_SERVICE_CERTIFICATE=1)
+
 # add the library
 add_library(${PLUGIN_NAME} SHARED ${PLUGIN_SOURCES})
 target_compile_definitions(${PLUGIN_NAME} PRIVATE ${WIDEVINE_FLAGS})
