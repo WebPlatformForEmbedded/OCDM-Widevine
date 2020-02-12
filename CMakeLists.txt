@@ -13,6 +13,7 @@ set(MODULE_NAME WPEFramework${PLUGIN_NAME})
 
 find_package(${NAMESPACE}Core REQUIRED)
 find_package(WideVine REQUIRED)
+find_path(THUNDER_INCLUDE_DIRS NAMES cdmi.h PATH_SUFFIXES "WPEFramework/interfaces/")
 
 set(PLUGIN_SOURCES
     HostImplementation.cpp
@@ -23,7 +24,7 @@ set(PLUGIN_SOURCES
 # add the library
 add_library(${PLUGIN_NAME} SHARED ${PLUGIN_SOURCES})
 target_compile_definitions(${PLUGIN_NAME} PRIVATE ${WIDEVINE_FLAGS})
-target_include_directories(${PLUGIN_NAME} PRIVATE ${PLUGINS_INCLUDE_DIR} ${WIDEVINE_INCLUDE_DIRS})
+target_include_directories(${PLUGIN_NAME} PRIVATE ${PLUGINS_INCLUDE_DIR} ${THUNDER_INCLUDE_DIRS} ${WIDEVINE_INCLUDE_DIRS})
 target_link_libraries(${PLUGIN_NAME} PRIVATE ${PLUGIN_LIBS} ${NAMESPACE}Core::${NAMESPACE}Core ${WIDEVINE_LIBRARIES})
 set_target_properties(${PLUGIN_NAME} PROPERTIES SUFFIX ".drm")
 set_target_properties(${PLUGIN_NAME} PROPERTIES PREFIX "")
