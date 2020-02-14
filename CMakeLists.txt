@@ -30,3 +30,7 @@ set_target_properties(${PLUGIN_NAME} PROPERTIES SUFFIX ".drm")
 set_target_properties(${PLUGIN_NAME} PROPERTIES PREFIX "")
 
 install(TARGETS ${PLUGIN_NAME} DESTINATION ${CMAKE_INSTALL_PREFIX}/share/${NAMESPACE}/OCDM)
+
+install(FILES "${CMAKE_SOURCE_DIR}/tools/keybox/testkeybox.bin"
+        RENAME "keybox.bin"
+        DESTINATION "${CMAKE_INSTALL_PREFIX}/etc/WideVine/")
