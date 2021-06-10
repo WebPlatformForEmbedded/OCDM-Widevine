@@ -17,10 +17,7 @@
  * limitations under the License.
  */
 
-#pragma once
 
-#ifndef MODULE_NAME
-#define MODULE_NAME OCDM_Widevine
-#endif
+#include "Module.h"
 
-#include <plugins/plugins.h>
+MODULE_NAME_DECLARATION(BUILD_REFERENCE)

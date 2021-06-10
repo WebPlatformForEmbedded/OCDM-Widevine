@@ -17,8 +17,9 @@
  * limitations under the License.
  */
 
-#ifndef WIDEVINE_HOST_IMPLEMENTATION_H
-#define WIDEVINE_HOST_IMPLEMENTATION_H
+#pragma once
+
+#include "Module.h"
 
 #include "Module.h"
 
@@ -110,5 +111,3 @@ private:
 };
 
 } // namespace CDMi
-
-#endif  // WIDEVINE_HOST_IMPLEMENTATION_H
