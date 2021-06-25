@@ -23,6 +23,8 @@
 
 #include "Module.h"
 
+#include "Module.h"
+
 #include "cdm.h"
 
 #include <core/core.h>
